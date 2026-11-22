@@ -10,7 +10,7 @@ S2. Accepted explanation and procedure: "Gracias por la correccion, continuemos"
 
 ## Tasks
 - T1 | S1-S2 | parent coordination with gentle-ai owner session, read-only consumer map | done | evidence: L16-L17; app/CLI/Linux reentry and dependency cycle mapped; full-install fixture unavailable, real public staging boundary selected. This is map/design completion, not implementation or runtime proof.
-- T2 | S1-S2,S4 | gentle-ai owner session bounded writer handoff (context backstop) | done | acquisition commit: 471e29731f5dc301a0919de7713f2e7c5a381c34; integration commit: dbb843a3ff6de0d05990780e76840d25d445d223 (known-partial Linux service path); remote branch/Actions authorized; first unit is acquisition-only helper with isolated tests. RED job-1 exited 127: /bin/bash: go: command not found; runner-unavailable test-first exception, no behavioral RED claim. Integration follows separately.
+- T2 | S1-S2,S4 | gentle-ai owner session bounded writer handoff (context backstop) | done | acquisition: 471e29731; macOS staging integration: dbb843a3f; format: 4e7fb839a; code and docs verified by selected native suites on 8d935a185. Linux bootstrap explicitly deferred by S4; no real installation/E2E claim. Initial missing-runner RED exception remains recorded in L5-L6.
 - T3 | S1-S4 | independent gentle-ai-verify plus native review | done | CI commits: 8d935a185, style4e7fb839a; native reviews consumed, three-OS selected suites and 15-pair differential passed. One existing Linux root-chown case skipped; full repository/E2E/real installation not verified. Evidence L29-L37.
 
 ## Log
