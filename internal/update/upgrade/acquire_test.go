@@ -216,7 +216,7 @@ func TestAcquireReleaseBinaryRejectsEarly(t *testing.T) {
 	cancel()
 	cases := []struct {
 		name, version, goos, arch string
-		ctx context.Context
+		ctx                       context.Context
 	}{
 		{"canceled", "5.0.0", "darwin", "arm64", ctx},
 		{"unsupported OS", "5.0.0", "windows", "amd64", context.Background()},
@@ -247,8 +247,8 @@ func TestAcquireArchiveBinaryRejectsUnsafeArchives(t *testing.T) {
 	hardlink := tar.Header{Name: "gentle-ai", Typeflag: tar.TypeLink, Linkname: "other"}
 	valid := acquisitionArchive(t, regular)
 	cases := []struct {
-		name string
-		archive []byte
+		name                  string
+		archive               []byte
 		tarLimit, binaryLimit int64
 	}{
 		{"duplicate regular", acquisitionArchive(t, regular, regular), 16384, 32},

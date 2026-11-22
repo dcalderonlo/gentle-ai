@@ -38,7 +38,7 @@ func TestShellInstallReleaseContextAtFreshAndEmbeddedEntries(t *testing.T) {
 	shellInstallInspect = func(shellinstaller.UserInstallRequest) (string, error) { return "token", nil }
 	selection := ShellInstallSelection{
 		Confirmed: true,
-		Request: shellinstaller.UserInstallRequest{Destination: t.TempDir(), Mode: "separate", Confirmation: "token"},
+		Request:   shellinstaller.UserInstallRequest{Destination: t.TempDir(), Mode: "separate", Confirmation: "token"},
 	}
 	sentinel := errors.New("stop before installation")
 	entered := false
