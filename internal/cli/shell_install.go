@@ -20,6 +20,9 @@ import (
 	"github.com/gentleman-programming/gentle-ai/v5/internal/shellinstaller"
 )
 
+// ShellContextDecorator is configured by the application for each invocation.
+var ShellContextDecorator = func(ctx context.Context) context.Context { return ctx }
+
 var (
 	shellInstallInspect = shellinstaller.InspectUserInstall
 	shellInstallEntry   = shellinstaller.RunUserEntry
@@ -168,6 +171,7 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	ctx = ShellContextDecorator(ctx)
 	token, err := shellInstallInspect(selection.Request)
 	if err != nil {
 		return err
@@ -481,7 +485,7 @@ func shellExecutionContext() (context.Context, context.CancelFunc, string, error
 	if err != nil {
 		cancel()
 	}
-	return ctx, cancel, self, err
+	return ShellContextDecorator(ctx), cancel, self, err
 }
 
 func preserveShellFailure(err error) error {

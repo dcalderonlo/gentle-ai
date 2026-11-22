@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -89,6 +90,17 @@ func clearPendingSyncAfterDeferredSync(homeDir string, fallback state.InstallSta
 }
 
 func RunArgs(args []string, stdout io.Writer) error {
+	version := Version
+	cli.AppVersion = version
+	upgrade.AppVersion = version
+	cli.ShellContextDecorator = func(ctx context.Context) context.Context {
+		return shellinstaller.WithSupervisorRelease(ctx, version, func(ctx context.Context, requested string) ([]byte, error) {
+			if requested != version {
+				return nil, errors.New("supervisor release version mismatch")
+			}
+			return upgrade.AcquireReleaseBinary(ctx, "Gentleman-Programming", "gentle-ai", version, runtime.GOOS, runtime.GOARCH)
+		})
+	}
 	// Shell installation and ordinary owned launches bypass generic setup,
 	// detection, self-update and gates; each platform backend (Linux supervisor,
 	// Windows worker) validates its own physical limits.
@@ -98,11 +110,6 @@ func RunArgs(args []string, stdout io.Writer) error {
 	if len(args) == 0 && (!isattyFn(os.Stdin.Fd()) || !isattyFn(os.Stdout.Fd())) {
 		return errors.New(nonInteractiveTUIError)
 	}
-
-	// Propagate the build-time version to the CLI and upgrade layers so backup
-	// manifests record which version of gentle-ai created them.
-	cli.AppVersion = Version
-	upgrade.AppVersion = Version
 
 	// --yes as a global CLI flag for self-update is handled via GENTLE_AI_YES=1.
 	// Per-subcommand --yes flags (e.g. restore --yes) are parsed by each subcommand.

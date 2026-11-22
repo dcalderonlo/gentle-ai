@@ -561,7 +561,7 @@ func userRunInstall(ctx context.Context, req UserInstallRequest) (result UserIns
 	if err != nil {
 		return result, err
 	}
-	selfSHA, err := userCopySupervisor(ctx, self, filepath.Join(root, "supervisor"))
+	selfSHA, err := StageUserSupervisor(ctx, self, filepath.Join(root, "supervisor"))
 	if err != nil {
 		return result, fmt.Errorf("supervisor provenance: %w", err)
 	}

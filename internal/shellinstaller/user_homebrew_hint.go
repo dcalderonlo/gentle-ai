@@ -12,7 +12,7 @@ import (
 var userHomebrewPrefixes = []string{"/opt/homebrew", "/usr/local/Cellar", "/usr/local/Homebrew"}
 
 const userHomebrewRemediation = "; gentle-ai was started from Homebrew's shared prefix, whose group-writable directories it does not trust as a supervisor ancestor. " +
-	"Keep Homebrew as it is (do not change Homebrew permissions) and run gentle-ai from a private directory instead: " +
+	"Private supervisor staging can acquire an authenticated release for the exact running version; earlier execution-boundary checks may still refuse this source. If acquisition is unavailable or an earlier check refuses, keep Homebrew as it is (do not change Homebrew permissions) and run gentle-ai from a private directory instead: " +
 	"either `go install github.com/gentleman-programming/gentle-ai/v5/cmd/gentle-ai@v5.0.0` into your own GOBIN, " +
 	"or copy the gentle-ai binary into a user-owned 0755 directory (for example ~/.local/bin) and run it from there"
 
@@ -27,8 +27,15 @@ func userHomebrewHint(path string) string {
 	return ""
 }
 
+type supervisorAncestorRefusal struct {
+	path    string
+	message string
+}
+
+func (e *supervisorAncestorRefusal) Error() string { return e.message }
+
 // userSupervisorAncestorRefusal is the action-time refusal of an unsafe
 // supervisor ancestor; a Homebrew ancestor adds its private-directory hint.
 func userSupervisorAncestorRefusal(path string, owner uint32, mode os.FileMode) error {
-	return privateError("source", fmt.Errorf("supervisor ancestor refused: path=%q owner=%d mode=%#o%s", path, owner, mode, userHomebrewHint(path)))
+	return privateError("source", &supervisorAncestorRefusal{path: path, message: fmt.Sprintf("supervisor ancestor refused: path=%q owner=%d mode=%#o%s", path, owner, mode, userHomebrewHint(path))})
 }
