@@ -43,18 +43,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          go test ./internal/shellinstaller -list '^(TestStageUserSupervisor|TestSupervisorRelease)' | tee "$RUNNER_TEMP/supervisor-tests.txt"
+          go test ./internal/shellinstaller -list '^(TestStageUserSupervisor|TestSupervisorRelease|TestUserSupervisor|TestUserHomebrew)' | tee "$RUNNER_TEMP/supervisor-tests.txt"
           grep -q '^TestSupervisorReleaseContextPreservesCancellationAndVersion$' "$RUNNER_TEMP/supervisor-tests.txt"
           if [ "$RUNNER_OS" != Windows ]; then
             grep -q '^TestSupervisorReleaseStaging$' "$RUNNER_TEMP/supervisor-tests.txt"
             grep -q '^TestStageUserSupervisorPreservesExistingDestination$' "$RUNNER_TEMP/supervisor-tests.txt"
+            grep -q '^TestUserHomebrewHintNamesPrivateRemediationForHomebrewAncestors$' "$RUNNER_TEMP/supervisor-tests.txt"
+          fi
+          if [ "$RUNNER_OS" = Linux ]; then
+            grep -q '^TestUserSupervisorPreimages$' "$RUNNER_TEMP/supervisor-tests.txt"
           fi
           go test ./internal/cli -list '^TestShellInstallRelease' | tee "$RUNNER_TEMP/cli-tests.txt"
           grep -q '^TestShellInstallReleaseInlinePreservesCallerContext$' "$RUNNER_TEMP/cli-tests.txt"
           go test ./internal/app -list '^TestShellInstallInitializesBuildBeforeEarlyDispatch$' | tee "$RUNNER_TEMP/app-tests.txt"
           grep -q '^TestShellInstallInitializesBuildBeforeEarlyDispatch$' "$RUNNER_TEMP/app-tests.txt"
-      - name: Execute supervisor context and native staging tests
-        run: go test -v ./internal/shellinstaller -run '^(TestStageUserSupervisor|TestSupervisorRelease)' -count=1 -timeout=5m
+      - name: Execute supervisor staging and existing provenance regressions
+        run: go test -v ./internal/shellinstaller -run '^(TestStageUserSupervisor|TestSupervisorRelease|TestUserSupervisor|TestUserHomebrew)' -count=1 -timeout=5m
       - name: Execute CLI context and embedded entry tests
         run: go test -v ./internal/cli -run '^TestShellInstallRelease' -count=1 -timeout=5m
       - name: Execute early application dispatch tests

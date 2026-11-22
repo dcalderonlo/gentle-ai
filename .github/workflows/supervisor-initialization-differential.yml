@@ -1,0 +1,153 @@
+name: Supervisor initialization differential smoke
+
+on:
+  push:
+    branches: [fix/homebrew-verified-supervisor]
+  workflow_dispatch:
+    inputs:
+      baseline_sha:
+        description: Full baseline commit SHA (40 or 64 hex characters)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Resolve one immutable baseline for every platform
+        id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_SHA: ${{ inputs.baseline_sha }}
+          BASELINE_BRANCH: ${{ github.event.repository.default_branch }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          sha="$REQUESTED_SHA"
+          if [ "$EVENT_NAME" = push ]; then
+            sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$BASELINE_BRANCH" --jq .sha)
+          fi
+          if [[ ! "$sha" =~ ^([[:xdigit:]]{40}|[[:xdigit:]]{64})$ ]]; then
+            echo 'baseline must resolve to a full hexadecimal SHA' >&2
+            exit 1
+          fi
+          printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+          printf 'Immutable baseline: %s\n' "$sha"
+  differential:
+    needs: baseline
+    name: Initialization smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Validate baseline before checkout
+        shell: bash
+        env:
+          BASELINE_SHA: ${{ needs.baseline.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$BASELINE_SHA" =~ ^([[:xdigit:]]{40}|[[:xdigit:]]{64})$ ]]; then
+            echo 'baseline_sha must be a full 40- or 64-character hexadecimal SHA' >&2
+            exit 1
+          fi
+      - name: Checkout selected candidate
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: candidate
+          persist-credentials: false
+      - name: Checkout validated baseline
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ needs.baseline.outputs.sha }}
+          path: baseline
+          persist-credentials: false
+      - name: Set up candidate Go toolchain
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: candidate/go.mod
+          cache-dependency-path: candidate/go.sum
+      - name: Allocate isolated binaries and scratch
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP"
+          suffix=''
+          if [ "$RUNNER_OS" = Windows ]; then
+            root=$(cygpath -u "$root")
+            suffix='.exe'
+          fi
+          scratch=$(mktemp -d "$root/supervisor-differential.XXXXXX")
+          printf 'DIFFERENTIAL_SCRATCH=%s\nBASE_BIN=%s/base%s\nCURRENT_BIN=%s/current%s\n' \
+            "$scratch" "$scratch" "$suffix" "$scratch" "$suffix" >> "$GITHUB_ENV"
+      - name: Build baseline with fixed version
+        working-directory: baseline
+        shell: bash
+        run: go build -ldflags '-X main.version=5.0.0' -o "$BASE_BIN" ./cmd/gentle-ai
+      - name: Build candidate with identical version
+        working-directory: candidate
+        shell: bash
+        run: go build -ldflags '-X main.version=5.0.0' -o "$CURRENT_BIN" ./cmd/gentle-ai
+      # This compares shared initialization only, not provenance, installation,
+      # sandbox qualification, security or end-to-end behavior.
+      - name: Compare five isolated public command pairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          scratch="$DIFFERENTIAL_SCRATCH"
+          trap 'rm -rf -- "$scratch"' EXIT
+          failed=0
+          pairs=0
+          for case_id in version install sync restore non_tty; do
+            for side in base current; do
+              run="$scratch/$case_id/$side"
+              mkdir -p "$run"/{home,tmp,config,cache,data}
+              case "$case_id" in
+                version) set -- --version;;
+                install) set -- install --help;;
+                sync) set -- sync --help;;
+                restore) set -- restore --help;;
+                non_tty) set --;;
+              esac
+              if [ "$side" = base ]; then bin="$BASE_BIN"; else bin="$CURRENT_BIN"; fi
+              rc=0
+              (cd "$run"; env -i PATH=/usr/bin:/bin HOME="$run/home" \
+                USERPROFILE="$run/home" APPDATA="$run/config" LOCALAPPDATA="$run/cache" \
+                SYSTEMROOT="${SYSTEMROOT:-}" TMPDIR="$run/tmp" TEMP="$run/tmp" TMP="$run/tmp" \
+                XDG_CONFIG_HOME="$run/config" XDG_CACHE_HOME="$run/cache" XDG_DATA_HOME="$run/data" \
+                LANG=C LC_ALL=C TERM=dumb "$bin" "$@" </dev/null) \
+                >"$run/stdout" 2>"$run/stderr" || rc=$?
+              printf '%s\n' "$rc" > "$run/exit"
+              if [ -n "$(find "$run/home" "$run/config" "$run/cache" "$run/data" "$run/tmp" -mindepth 1 -print -quit)" ]; then
+                printf 'Unexpected state mutation: %s %s\n' "$case_id" "$side" >&2
+                failed=1
+              fi
+            done
+            pairs=$((pairs + 1))
+            for channel in stdout stderr exit; do
+              if ! diff -u "$scratch/$case_id/base/$channel" "$scratch/$case_id/current/$channel"; then
+                printf 'MISMATCH: %s %s\n' "$case_id" "$channel" >&2
+                failed=1
+              fi
+            done
+            printf 'Compared pair %s/5: %s\n' "$pairs" "$case_id"
+          done
+          printf 'Compared %s command pairs (stdout, stderr, exit); mismatch=%s\n' "$pairs" "$failed"
+          exit "$failed"
+      - name: Clean owned scratch after earlier failure
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${DIFFERENTIAL_SCRATCH:-}" ]; then
+            rm -rf -- "$DIFFERENTIAL_SCRATCH"
+          fi
