@@ -1,0 +1,281 @@
+name: Supervisor repository suites
+
+on:
+  push:
+    branches: [fix/homebrew-verified-supervisor]
+    paths:
+      - '**/*.go'
+      - '**/go.mod'
+      - '**/go.sum'
+      - 'bench/**'
+      - '.github/workflows/supervisor-repository-suites.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      sha: ${{ steps.resolve.outputs.sha }}
+    steps:
+      - name: Resolve default branch once
+        id: resolve
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASELINE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/$BASELINE_BRANCH" --jq .sha)
+          if [[ ! "$sha" =~ ^([[:xdigit:]]{40}|[[:xdigit:]]{64})$ ]]; then
+            echo 'baseline must resolve to a full hexadecimal SHA' >&2
+            exit 1
+          fi
+          printf 'sha=%s\n' "$sha" >> "$GITHUB_OUTPUT"
+          printf 'Immutable baseline: %s\n' "$sha"
+
+  root:
+    needs: baseline
+    name: Root suite (${{ matrix.role }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        role: [baseline, candidate]
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout role
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ matrix.role == 'baseline' && needs.baseline.outputs.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Identify checkout and toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          echo "$RUNNER_OS"
+          go version
+      - name: Run root suite
+        run: go test -v ./...
+
+  bench:
+    needs: baseline
+    name: Bench module (${{ matrix.role }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        role: [baseline, candidate]
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout role
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ matrix.role == 'baseline' && needs.baseline.outputs.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version-file: bench/go.mod
+          cache-dependency-path: bench/go.sum
+      - name: Identify checkout and toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rev-parse HEAD
+          echo "$RUNNER_OS"
+          go version
+      # This tests the module, not driven journey execution.
+      - name: Build, vet and test
+        shell: bash
+        working-directory: bench
+        run: |
+          set -euo pipefail
+          go build -o "$RUNNER_TEMP/gentle-ai-bench" .
+          go vet ./...
+          go test -v ./...
+
+  windows:
+    needs: baseline
+    name: Windows (${{ matrix.role }}, ${{ matrix.shard.name }})
+    runs-on: windows-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        role: [baseline, candidate]
+        shard:
+          - name: cli-a-m
+            packages: ./internal/cli
+            run: ^Test[A-M]
+          - name: cli-n
+            packages: ./internal/cli
+            run: ^TestN
+          - name: cli-o
+            packages: ./internal/cli
+            run: ^TestO
+          - name: cli-p-q-s-z
+            packages: ./internal/cli
+            run: ^Test[P-Q]|^Test[S-Z]
+          - name: cli-review-a-m
+            packages: ./internal/cli
+            run: ^TestReview[A-Ma-m]
+          - name: cli-review-n-z
+            packages: ./internal/cli
+            run: ^TestReview[N-Zn-z]
+          - name: cli-r-other
+            packages: ./internal/cli
+            run: ^TestR[A-Da-d]|^TestRe[A-Ua-u]|^TestRevi[N-Zn-z]|^TestR[F-Zf-z]
+          - name: reviewtransaction-a-c
+            packages: ./internal/reviewtransaction
+            run: ^Test[A-C]
+          - name: reviewtransaction-d-k
+            packages: ./internal/reviewtransaction
+            run: ^Test[D-K]
+          - name: reviewtransaction-l-z
+            packages: ./internal/reviewtransaction
+            run: ^Test[L-Z]
+          - name: rest
+            packages: ""
+            run: ""
+    steps:
+      - name: Checkout role
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ matrix.role == 'baseline' && needs.baseline.outputs.sha || github.sha }}
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      # Diagnostic only: Server/elevated runners may run Go tests but are not
+      # qualified Windows installer hosts. Never change UAC or admission here.
+      - name: Report read-only Windows host capabilities
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $os = Get-CimInstance Win32_OperatingSystem
+          $cpu = Get-CimInstance Win32_ComputerSystem
+          Write-Host "OS Caption=$($os.Caption) Build=$($os.BuildNumber) ProductType=$($os.ProductType)"
+          Write-Host "Architecture=$($os.OSArchitecture) SystemType=$($cpu.SystemType) Process64=$([Environment]::Is64BitProcess)"
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class SupervisorTokenDiagnostic {
+            [DllImport("advapi32.dll", SetLastError=true)]
+            public static extern bool GetTokenInformation(IntPtr token, int kind,
+              out int value, int size, out int required);
+          }
+          '@
+          $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+          try {
+            $elevated = 0
+            $required = 0
+            if (-not [SupervisorTokenDiagnostic]::GetTokenInformation($identity.Token, 20, [ref]$elevated, 4, [ref]$required)) {
+              throw 'Cannot read TokenElevation; installer capability is unknown'
+            }
+            $principal = [Security.Principal.WindowsPrincipal]::new($identity)
+            $member = @($identity.Groups | ForEach-Object { $_.Value }) -contains 'S-1-5-32-544'
+            $enabled = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+            Write-Host "TokenElevated=$($elevated -ne 0) TokenContainsAdministratorsSid=$member EnabledAdministratorRole=$enabled"
+          } finally {
+            $identity.Dispose()
+          }
+          foreach ($path in @($env:GITHUB_WORKSPACE, $env:RUNNER_TEMP)) {
+            $drive = [IO.Path]::GetPathRoot($path).Substring(0, 1)
+            $volume = Get-Volume -DriveLetter $drive
+            Write-Host "Volume=$drive FileSystem=$($volume.FileSystemType) DriveType=$($volume.DriveType)"
+          }
+          Write-Host 'Metadata only: suites do not establish native Windows installation qualification.'
+      - name: Identify checkout and toolchain
+        shell: pwsh
+        run: |
+          git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Write-Host $env:RUNNER_OS
+          go version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Bind shard matrix to canonical inventory guard
+        if: matrix.role == 'candidate' && matrix.shard.name == 'rest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def shards(path, job):
+              data = Path(path).read_text(encoding='utf-8')
+              marker = f'  {job}:'
+              start = data.index(marker)
+              end = data.index('\n    steps:', start)
+              result = []
+              name = package = None
+              for line in data[start:end].splitlines():
+                  line = line.strip()
+                  if line.startswith('- name: '):
+                      name = line.removeprefix('- name: ').strip('"')
+                  elif line.startswith('packages: '):
+                      package = line.removeprefix('packages: ').strip('"')
+                  elif line.startswith('run: '):
+                      selector = line.removeprefix('run: ').strip('"')
+                      if name is None or package is None:
+                          raise ValueError('incomplete shard')
+                      result.append((name, package, selector))
+                      name = package = None
+              if name is not None or package is not None or not result:
+                  raise ValueError('empty or incomplete shard matrix')
+              return result
+
+          canonical = shards('.github/workflows/windows-full-suite.yml', 'windows-full-suite')
+          candidate = shards('.github/workflows/supervisor-repository-suites.yml', 'windows')
+          if canonical != candidate:
+              raise SystemExit(f'shard matrices differ: canonical={canonical!r}, candidate={candidate!r}')
+          print(f'Canonical shard matrix matches: {len(candidate)} shards')
+          PY
+          go test ./internal/assets -run '^TestWindowsFullSuiteShardsCoverEveryTestName$' -count=1 -timeout=5m
+      - name: Run shard
+        shell: pwsh
+        timeout-minutes: 35
+        env:
+          SHARD_PACKAGES: ${{ matrix.shard.packages }}
+          SHARD_SELECTOR: ${{ matrix.shard.run }}
+          SHARD_NAME: ${{ matrix.shard.name }}
+        run: |
+          if ($env:SHARD_PACKAGES -ne '') {
+            $packages = @($env:SHARD_PACKAGES)
+          } else {
+            $packages = @(go list ./... | Where-Object {
+              $_ -notmatch '/internal/cli$' -and $_ -notmatch '/internal/reviewtransaction$'
+            })
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          if (-not $packages) { throw 'shard resolved to no packages' }
+          $selector = $env:SHARD_SELECTOR
+          $arguments = @('test', '-v') + $packages + @('-count=1', '-timeout=30m')
+          if ($selector -ne '') { $arguments += @('-run', $selector) }
+          if ($selector -ne '') {
+            $selected = @(go test $packages[0] -list $selector | Where-Object { $_ -match '^Test' })
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            Write-Host "shard $env:SHARD_NAME`: $($selected.Count) test(s) match $selector"
+            if ($selected.Count -eq 0) { throw "shard selector $selector matched no test" }
+          } else {
+            Write-Host "shard $env:SHARD_NAME`: $($packages.Count) package(s)"
+          }
+          go @arguments
+          exit $LASTEXITCODE
