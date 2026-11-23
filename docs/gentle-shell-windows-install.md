@@ -5,6 +5,8 @@ ports the existing Separate installer TUI to Windows 10 22H2 (build 19045) and
 Windows 11 x64. Actual Windows
 installation, both UI openings and terminal restoration remain unverified.
 Cross-compilation is not a substitute for those checks.
+Use the [manual Windows validation handoff](gentle-shell-windows-validation.md)
+for an isolated external review; no Windows PASS is implied.
 
 ## Candidate path
 
