@@ -1,0 +1,44 @@
+name: Linux qualified lock fixture verification
+
+on:
+  push:
+    branches: ['verification/linux-lock-fix-*']
+    paths:
+      - 'internal/shellinstaller/user_install_lock_test.go'
+      - '.github/workflows/linux-lock-context-verification.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    if: github.repository == 'dcalderonlo/gentle-ai' && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact corrected fixture
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Verify runner and fixture formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          test "$(id -u)" -ne 0
+          test -x /usr/bin/setpriv
+          git rev-parse HEAD
+          go version
+          test -z "$(gofmt -l internal/shellinstaller/user_install_lock_test.go)"
+      - name: Verify corrected contention fixture once
+        shell: bash
+        run: go test -v ./internal/shellinstaller -run '^TestUserInstallFailsFastWhileAnotherOperationHoldsTheLock$' -count=1 -timeout=1m
+      - name: Verify affected installer package once
+        shell: bash
+        run: go test -v ./internal/shellinstaller -count=1 -timeout=10m

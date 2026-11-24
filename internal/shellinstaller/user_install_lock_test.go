@@ -237,12 +237,17 @@ func TestUninstallUserShellInstallFailsFastWhileAnotherOperationHoldsTheLock(t *
 }
 
 // TestUserOperationLockInstallHelperProcess is the child half of the install
-// contention test: the direct installer sets no-new-privileges on its own
-// process, so it runs isolated from the parent test binary.
+// contention test. Like the production direct worker, it inherits NNP before
+// Go starts; setting it on one Go thread cannot qualify the whole process.
 func TestUserOperationLockInstallHelperProcess(t *testing.T) {
 	destination := os.Getenv(userLockInstallHelperEnv)
 	if destination == "" {
 		t.Skip("helper process only")
+	}
+	status, statusErr := os.ReadFile("/proc/self/status")
+	if statusErr != nil || !strings.Contains(string(status), "\nNoNewPrivs:\t1\n") {
+		os.Stdout.WriteString("fixture requires inherited NoNewPrivs=1\n")
+		os.Exit(2)
 	}
 	req := UserInstallRequest{Destination: destination, Mode: "separate"}
 	confirmation, err := InspectUserInstall(req)
@@ -279,7 +284,7 @@ func TestUserInstallFailsFastWhileAnotherOperationHoldsTheLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer release()
-	child := exec.Command(os.Args[0], "-test.run=^TestUserOperationLockInstallHelperProcess$", "-test.count=1")
+	child := exec.Command("/usr/bin/setpriv", "--no-new-privs", "--inh-caps=-all", "--ambient-caps=-all", "--", os.Args[0], "-test.run=^TestUserOperationLockInstallHelperProcess$", "-test.count=1")
 	child.Env = append(os.Environ(), userLockInstallHelperEnv+"="+destination)
 	output, err := child.Output()
 	want := "contended " + userLockedMessage(destination) + "\n"
