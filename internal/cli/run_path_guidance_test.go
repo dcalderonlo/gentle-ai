@@ -26,10 +26,16 @@ func TestEngramPathGuidanceZsh(t *testing.T) {
 }
 
 func TestEngramPathGuidanceDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("GOBIN", "")
+	t.Setenv("GOPATH", "")
+
 	msg := engramPathGuidance("")
-	want := filepath.Join("go", "bin")
-	if !strings.Contains(msg, want) {
-		t.Fatalf("engramPathGuidance(default) missing %q: %s", want, msg)
+	want := "Add " + filepath.Join(home, "go", "bin") + " to your shell PATH and restart the terminal."
+	if msg != want {
+		t.Fatalf("engramPathGuidance(default) = %q, want %q", msg, want)
 	}
 }
 
