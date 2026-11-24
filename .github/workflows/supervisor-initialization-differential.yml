@@ -98,6 +98,60 @@ jobs:
         working-directory: candidate
         shell: bash
         run: go build -ldflags '-X main.version=5.0.0' -o "$CURRENT_BIN" ./cmd/gentle-ai
+      - name: Compile unsupported Linux architecture without executing it
+        if: runner.os == 'Linux'
+        working-directory: candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go test -c -o "$DIFFERENTIAL_SCRATCH/installer-arm64.test" ./internal/shellinstaller
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go test -c -o "$DIFFERENTIAL_SCRATCH/cli-arm64.test" ./internal/cli
+      - name: Compare unchanged Linux entry refusals without service admission
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          scratch="$DIFFERENTIAL_SCRATCH"
+          # Generate the same disposable public-API probe in both module trees.
+          # No committed Go test reads Git history or depends on a fixed SHA.
+          for side in baseline candidate; do
+            probe="$side/cmd/supervisor-entry-compat-probe"
+            test ! -e "$probe"
+            mkdir "$probe"
+            printf '%s\n' \
+              'package main' \
+              'import ("bytes"; "context"; "encoding/json"; "fmt"; "os"; "strings"; "github.com/gentleman-programming/gentle-ai/v5/internal/shellinstaller")' \
+              'func main() {' \
+              'status, err := os.ReadFile("/proc/self/status")' \
+              'if err != nil || !strings.Contains(string(status), "NoNewPrivs:\t0\n") || len(os.Args) != 2 || os.Getuid() == 0 { fmt.Fprintln(os.Stderr, "probe requires non-root Linux without sandbox admission"); os.Exit(2) }' \
+              'ctx, cancel := context.WithCancel(context.Background()); cancel()' \
+              'var stdout, stderr bytes.Buffer' \
+              'err = shellinstaller.RunUserEntry(ctx, "/missing-supervisor", []string{os.Args[1]}, nil, &stdout, &stderr)' \
+              'message := ""; if err != nil { message = err.Error() }' \
+              'if e := json.NewEncoder(os.Stdout).Encode(map[string]string{"error":message,"stdout":stdout.String(),"stderr":stderr.String()}); e != nil { os.Exit(2) }' \
+              'if err != nil { os.Exit(1) }' \
+              '}' > "$probe/main.go"
+            (cd "$side"; go build -o "$scratch/$side-entry-probe" ./cmd/supervisor-entry-compat-probe)
+          done
+          pairs=0
+          for selector in check internal-check recover internal-recover launch internal-launch launch-pnpm internal-launch-pnpm native-coordinate internal-native-coordinate native-produce internal-native-produce unknown internal-unknown; do
+            for side in baseline candidate; do
+              run="$scratch/entry-$selector/$side"
+              mkdir -p "$run"/{home,tmp,config,cache,data}
+              rc=0
+              (cd "$run"; env -i PATH=/usr/bin:/bin HOME="$run/home" TMPDIR="$run/tmp" XDG_CONFIG_HOME="$run/config" XDG_CACHE_HOME="$run/cache" XDG_DATA_HOME="$run/data" "$scratch/$side-entry-probe" "$selector") > "$run/stdout" 2> "$run/stderr" || rc=$?
+              printf '%s\n' "$rc" > "$run/exit"
+              test "$rc" -eq 1
+              test -z "$(find "$run/home" "$run/tmp" "$run/config" "$run/cache" "$run/data" -mindepth 1 -print -quit)"
+            done
+            for channel in stdout stderr exit; do
+              diff -u "$scratch/entry-$selector/baseline/$channel" "$scratch/entry-$selector/candidate/$channel"
+            done
+            pairs=$((pairs + 1))
+            printf 'Compared unchanged entry: %s\n' "$selector"
+          done
+          test "$pairs" -eq 14
+          printf 'Compared 14 entry refusals: exact errors, stdout, stderr, exit; no sandbox/service admission.\n'
       # This compares shared initialization only, not provenance, installation,
       # sandbox qualification, security or end-to-end behavior.
       - name: Compare five isolated public command pairs
