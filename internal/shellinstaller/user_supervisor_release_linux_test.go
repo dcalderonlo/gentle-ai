@@ -197,7 +197,7 @@ func TestSupervisorReleaseMalformedInstallEntryBeforeAcquisition(t *testing.T) {
 		calls++
 		return nil, errors.New("unexpected acquisition")
 	})
-	for _, command := range []string{"internal-install", "internal-install-direct"} {
+	for _, command := range []string{"install", "internal-install", "internal-install-direct"} {
 		err := RunUserEntry(ctx, filepath.Join(root, "missing"), []string{command}, nil, nil, nil)
 		if err == nil || err.Error() != "invalid internal install arguments" {
 			t.Fatalf("%s error=%v", command, err)
