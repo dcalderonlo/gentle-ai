@@ -12,6 +12,12 @@ PATH=/usr/bin:/bin), its own session, a per-command deadline and the whole-run
 deadline. The JSON receipt is written to stdout and to --receipt; the exit code
 is non-zero on any failure and the receipt names the failing checkpoint.
 Standard library only; compatible with the system Python 3.9.
+
+The historical filename also supports Linux x86_64 inside the clean CI lab:
+UID must be non-root with NNP and empty capabilities already inherited, TMPDIR
+must be private under /work/, and the existing user-manager runtime and bus
+must survive child-environment sanitation. No fixture CA/DNS or supplier proxy
+is configured by this script. Other platforms fail closed before installation.
 """
 import argparse
 import hashlib
@@ -80,6 +86,39 @@ class QualificationError(Exception):
     pass
 
 
+_DARWIN_NODE_PIN = NODE_PIN
+_DARWIN_TOOL_PINS = dict(TOOL_PINS)
+
+
+def qualification_assets(system, machine):
+    """Exact platform data, not an override of execution admission."""
+    if (system, machine) == ('darwin', 'arm64'):
+        return {'schema': 'gentle-shell-macos-qualification/v1',
+                'triplet': 'darwin/arm64', 'suffix': 'darwin_arm64',
+                'node': _DARWIN_NODE_PIN, 'tools': dict(_DARWIN_TOOL_PINS)}
+    if (system, machine) == ('linux', 'x86_64'):
+        return {'schema': 'gentle-shell-linux-qualification/v1',
+                'triplet': 'linux/amd64', 'suffix': 'linux_amd64',
+                'node': ('41a74efb34cbde5c7632cdac0cf8bd1a14d0b8d73dc1e82755014d9a9ce70f5c', 123655872),
+                'tools': {
+                    'fd': ('761c72dc8e120d85b22292063be8a796e2eeb20eb3e4f38b8fa2343ccf3514a7',
+                           1573549, 'fd-v10.5.0-x86_64-unknown-linux-musl/fd', 'fd 10.5.0'),
+                    'rg': ('33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c',
+                           2265718, 'ripgrep-15.2.0-x86_64-unknown-linux-musl/rg', 'ripgrep 15.2.0'),
+                }}
+    raise QualificationError('qualification requires macOS arm64 or Linux x86_64')
+
+
+# Unsupported hosts still reach host() and emit a refusal receipt, never install.
+ASSETS = qualification_assets('linux', 'x86_64') if (sys.platform, os.uname().machine) == ('linux', 'x86_64') else qualification_assets('darwin', 'arm64')
+if ASSETS['triplet'] == 'linux/amd64':
+    # Preserve the existing 1330 s Linux worker ceiling with settlement margin.
+    WHOLE_RUN_SECONDS = 1260
+    SCHEMA, NODE_PIN, TOOL_PINS = ASSETS['schema'], ASSETS['node'], ASSETS['tools']
+    MEMBER_ROW = re.compile(r'"linux/amd64": asset\("gentle-ai_(\d+\.\d+\.\d+)_linux_amd64\.tar\.gz", "([0-9a-f]{64})", "([0-9a-f]{64})", "gentle-ai"\)')
+    RECEIPT['schema'] = SCHEMA
+
+
 def require(condition, message):
     if not condition:
         raise QualificationError(message)
@@ -135,6 +174,11 @@ class Context:
             'XDG_CONFIG_HOME': os.path.join(self.xdg, 'config'), 'XDG_STATE_HOME': os.path.join(self.xdg, 'state'),
             'XDG_CACHE_HOME': os.path.join(self.xdg, 'cache'), 'XDG_DATA_HOME': os.path.join(self.xdg, 'data'),
         }
+        if sys.platform == 'linux':
+            for key in ('XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'):
+                require(bool(os.environ.get(key)), 'Linux qualification requires inherited ' + key)
+                self.env[key] = os.environ[key]
+            self.env['GOMAXPROCS'] = '1'
 
     def run(self, label, args, limit, good=True):
         """Run one command in its own session with stdin closed and output in files."""
@@ -234,11 +278,11 @@ def pinned_member(prefix):
 	installer's own asset row and the installation's integrity.json."""
 	prefix = pathlib.Path(prefix)
 	row = MEMBER_ROW.search((prefix / 'lib/node_modules/gentle-pi/scripts/gentle-ai-installer.mjs').read_text())
-	require(row is not None, 'installer darwin/arm64 member manifest row differs')
+	require(row is not None, 'installer %s member manifest row differs' % ASSETS['triplet'])
 	version, asset_sha, binary_sha = row.group(1), row.group(2), row.group(3)
 	bundle = prefix / 'lib/node_modules/gentle-pi/.gentle-ai' / ('v' + version)
 	manifest = json.loads((bundle / 'integrity.json').read_text())
-	require(manifest.get('version') == version and manifest.get('asset') == 'gentle-ai_%s_darwin_arm64.tar.gz' % version
+	require(manifest.get('version') == version and manifest.get('asset') == 'gentle-ai_%s_%s.tar.gz' % (version, ASSETS['suffix'])
 			and manifest.get('assetSha256') == asset_sha and manifest.get('binarySha256') == binary_sha,
 			'installed member integrity.json differs from the authenticated installer')
 	observed = {'sha256': sha256_file(bundle / 'gentle-ai'), 'bytes': os.path.getsize(bundle / 'gentle-ai')}
@@ -249,7 +293,7 @@ def pinned(path, pin):
     observed = {'sha256': sha256_file(path), 'bytes': os.path.getsize(path)}
     observed['pinSHA256'] = pin[0]
     observed['matchesPin'] = observed['sha256'] == pin[0] and observed['bytes'] == pin[1]
-    require(observed['matchesPin'], '%s differs from its darwin pin' % os.path.basename(path))
+    require(observed['matchesPin'], '%s differs from its %s pin' % (os.path.basename(path), ASSETS['triplet'].split('/')[0]))
     return observed
 
 
@@ -421,6 +465,21 @@ def replace_bytes(path, data):
 
 def host():
     checkpoint('host')
+    if sys.platform == 'linux':
+        qualification_assets(sys.platform, os.uname().machine)
+        uid = os.getuid()
+        require(uid != 0, 'qualification must not run as root')
+        status = dict(line.split(':', 1) for line in pathlib.Path('/proc/self/status').read_text().splitlines() if ':' in line)
+        require(status.get('Uid', '').split() == [str(uid)] * 4, 'Linux qualifier UID context differs')
+        require(status.get('NoNewPrivs', '').strip() == '1', 'Linux qualifier must inherit NNP before exec')
+        require(all(int(status.get(key, '-1'), 16) == 0 for key in ('CapInh', 'CapPrm', 'CapEff', 'CapAmb', 'CapBnd')),
+                'Linux qualifier requires empty capabilities')
+        require(os.environ.get('XDG_RUNTIME_DIR') == '/run/user/%d' % uid, 'Linux runtime directory differs')
+        require(os.environ.get('DBUS_SESSION_BUS_ADDRESS') == 'unix:path=/run/user/%d/bus' % uid, 'Linux user bus differs')
+        RECEIPT['host'] = {'linux': os.uname().release, 'arch': os.uname().machine,
+                           'uid': uid, 'nnp': 1, 'python': platform.python_version()}
+        reached('host')
+        return
     require(sys.platform == 'darwin', 'qualification requires macOS')
     machine = os.uname().machine
     release = platform.mac_ver()[0]
@@ -434,9 +493,15 @@ def host():
 def prepare(arguments):
     checkpoint('root')
     base = os.path.realpath(os.environ.get('TMPDIR', ''))
-    require(os.environ.get('TMPDIR') and base.startswith('/private/') and os.path.isdir(base),
-            'TMPDIR must name an existing directory whose real path starts with /private/')
-    root = tempfile.mkdtemp(prefix='gentle-macos-qualification.', dir=base)
+    if sys.platform == 'linux':
+        require(os.environ.get('TMPDIR') and base.startswith('/work/') and os.path.isdir(base),
+                'Linux TMPDIR must name an existing private directory under /work/')
+        info = os.stat(base)
+        require(info.st_uid == os.getuid() and info.st_mode & 0o077 == 0, 'Linux TMPDIR ownership or mode differs')
+    else:
+        require(os.environ.get('TMPDIR') and base.startswith('/private/') and os.path.isdir(base),
+                'TMPDIR must name an existing directory whose real path starts with /private/')
+    root = tempfile.mkdtemp(prefix='gentle-linux-qualification.' if sys.platform == 'linux' else 'gentle-macos-qualification.', dir=base)
     require(os.path.realpath(root) == root, 'qualification root is not canonical')
     supervisor_source = os.path.realpath(arguments.gentle_ai)
     require(os.path.isfile(supervisor_source), 'candidate gentle-ai binary is missing')
@@ -488,7 +553,18 @@ def qualify(context):
         'gentleAi': pinned_member(prefix),
     }
     artifacts.update(tool_evidence(context, separate, agent, 'separate'))
-    RECEIPT['separate'] = {'versions': dict(versions, gentlePi=manifest['sdk_version']), 'artifacts': artifacts}
+    lock_path = os.path.join(separate, 'runtime/project/package-lock.json')
+    with open(lock_path, 'rb') as handle:
+        lock_bytes = handle.read()
+    packages = json.loads(lock_bytes)['packages']
+    sdk = packages['node_modules/gentle-pi']
+    require(sdk.get('version') == manifest['sdk_version'], 'lock SDK version differs from manifest')
+    require(re.fullmatch(r'sha512-[A-Za-z0-9+/]{86}==', sdk.get('integrity', '')) is not None,
+            'lock SDK integrity missing or malformed')
+    RECEIPT['separate'] = {'versions': dict(versions, gentlePi=manifest['sdk_version']), 'artifacts': artifacts,
+                           'sdkResolution': {'channel': 'stable/latest resolved at installation',
+                                             'version': sdk['version'], 'integrity': sdk['integrity'],
+                                             'lockSHA256': hashlib.sha256(lock_bytes).hexdigest()}}
     reached('separate-artifacts')
 
     checkpoint('shared-fixture')
@@ -592,11 +668,12 @@ def qualify(context):
                    if real_home_stack_entry(name))
     churn = {relative: changes[relative] for relative in REAL_HOME_SYSTEM_VOLATILE if relative in changes}
     if churn:
-        RECEIPT['realHomeSystemChurn'] = churn
+        RECEIPT['realHomeSystemChurnCount'] = sum(len(names) for entry in churn.values() for names in entry.values())
     if changed or stack:
-        RECEIPT['realHomeChanges'] = changes
-    require(not changed, 'real HOME changed at %s' % changed)
-    require(not stack, 'candidate stack wrote into real HOME system directories: %s' % stack)
+        RECEIPT['realHomeChangedWatchCount'] = len(changed)
+        RECEIPT['realHomeStackChangeCount'] = len(stack)
+    require(not changed, 'real HOME watched entries changed')
+    require(not stack, 'candidate stack wrote into real HOME system directories')
     reached('real-home', watchedEntries=len(REAL_HOME_WATCH))
 
 
@@ -610,13 +687,14 @@ def emit(path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Native macOS Gentle Shell qualification')
+    parser = argparse.ArgumentParser(description='Native Linux Gentle Shell qualification' if sys.platform == 'linux' else 'Native macOS Gentle Shell qualification')
     parser.add_argument('--gentle-ai', required=True, help='built candidate gentle-ai binary')
     parser.add_argument('--receipt', required=True, help='new file for the JSON evidence receipt')
     parser.add_argument('--source-sha', default='', help='candidate source commit, recorded only')
     arguments = parser.parse_args()
     receipt = os.path.abspath(arguments.receipt)
     RECEIPT['sourceSHA'] = arguments.source_sha
+    RECEIPT['proofBoundary'] = 'Private-source candidate runtime and actual suppliers; not Homebrew bootstrap, signature or official release identity; recovery is not uninstall.'
     RECEIPT['budgets'] = {'wholeRunSeconds': WHOLE_RUN_SECONDS, 'inspectSeconds': INSPECT_SECONDS,
                           'installSeconds': INSTALL_SECONDS, 'recoverSeconds': RECOVER_SECONDS, 'probeSeconds': PROBE_SECONDS}
     try:
