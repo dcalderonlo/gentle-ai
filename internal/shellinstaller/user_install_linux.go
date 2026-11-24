@@ -463,10 +463,12 @@ func userKernelMarkerCause(receipt string) string {
 // terminate with a physical receipt. It reuses the ordinary unit argument
 // builder and, since #5713, reports the inner check failure cause.
 func RunUserLaunchProbe(ctx context.Context, self string) error {
-	if os.Getuid() == 0 {
-		return rootSystemService(ctx, self, userLaunchProbeArgs(), nil, io.Discard, io.Discard)
-	}
-	return userService(ctx, self, userLaunchProbeArgs(), nil, io.Discard, io.Discard)
+	return WithPreparedSupervisorExecutable(ctx, self, func(prepared string) error {
+		if os.Getuid() == 0 {
+			return rootSystemService(ctx, prepared, userLaunchProbeArgs(), nil, io.Discard, io.Discard)
+		}
+		return userService(ctx, prepared, userLaunchProbeArgs(), nil, io.Discard, io.Discard)
+	})
 }
 
 func userLaunchProbeArgs() []string {
@@ -507,6 +509,23 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 	if len(args) == 0 {
 		return errors.New("missing shell entry")
 	}
+	// Preserve argument refusals before acquisition or source admission.
+	if args[0] == "internal-install" || args[0] == "internal-install-direct" {
+		if _, err := UserInstallFromEntry(args[1:]); err != nil {
+			return err
+		}
+	}
+	switch args[0] {
+	case "install", "internal-install", "internal-install-direct", "internal-native-own":
+		return WithPreparedSupervisorExecutable(ctx, self, func(prepared string) error {
+			return userRunEntryPrepared(ctx, prepared, args, stdin, stdout, stderr)
+		})
+	default:
+		return userRunEntryPrepared(ctx, self, args, stdin, stdout, stderr)
+	}
+}
+
+func userRunEntryPrepared(ctx context.Context, self string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	if args[0] == "internal-native-own" {
 		return userNativeOwnerEntry(ctx, self, args[1:], stdin, stdout, stderr)
 	}

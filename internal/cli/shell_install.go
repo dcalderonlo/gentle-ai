@@ -212,23 +212,23 @@ func RunShellInstallInline(ctx context.Context, selection ShellInstallSelection,
 	if err != nil {
 		return err
 	}
-	// The direct installer never exercises the delegated unit every later
-	// launch uses (#5713). Probe that unit before any effect: a refusal then
-	// leaves no destination, launcher or registry entry to unwind.
-	if probeErr := shellLaunchProbe(ctx, self); probeErr != nil {
-		return preserveShellFailure(fmt.Errorf("installation refused before any change: the delegated unit launch probe failed: %w", probeErr))
-	}
-	workerLog := &boundedWorkerLog{limit: 8192}
-	steps := &shellStepWriter{log: workerLog, report: report}
-	waitErr := shellDirectWorker(ctx, self, args[1:], steps, workerLog)
-	steps.flush()
-	if waitErr != nil {
-		if output := strings.TrimSpace(workerLog.String()); output != "" {
-			waitErr = fmt.Errorf("%w; worker output: %s", waitErr, output)
+	return shellinstaller.WithPreparedSupervisorExecutable(ctx, self, func(prepared string) error {
+		// Probe before the direct worker can publish any installation effects.
+		if probeErr := shellLaunchProbe(ctx, prepared); probeErr != nil {
+			return preserveShellFailure(fmt.Errorf("installation refused before any change: the delegated unit launch probe failed: %w", probeErr))
 		}
-		return preserveShellFailure(workerLog.flag(waitErr))
-	}
-	return nil
+		workerLog := &boundedWorkerLog{limit: 8192}
+		steps := &shellStepWriter{log: workerLog, report: report}
+		waitErr := shellDirectWorker(ctx, prepared, args[1:], steps, workerLog)
+		steps.flush()
+		if waitErr != nil {
+			if output := strings.TrimSpace(workerLog.String()); output != "" {
+				waitErr = fmt.Errorf("%w; worker output: %s", waitErr, output)
+			}
+			return preserveShellFailure(workerLog.flag(waitErr))
+		}
+		return nil
+	})
 }
 
 // shellStepWriter turns the direct worker's ordered step and detail lines into
