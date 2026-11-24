@@ -1,0 +1,191 @@
+name: Gentle Shell Linux actual suppliers
+
+on:
+  # Registration only: the privileged job rejects all push events.
+  push:
+    branches: ['verification/linux-real-*']
+    paths: ['.github/workflows/shell-linux-real-suppliers.yml']
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  clean-laboratory:
+    if: github.repository == 'dcalderonlo/gentle-ai' && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/verification/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Bind exact authorized source before any preparation
+        timeout-minutes: 2
+        shell: bash
+        env:
+          LAB_REPOSITORY: ${{ github.repository }}
+          LAB_EVENT: ${{ github.event_name }}
+          LAB_REF: ${{ github.ref }}
+          SOURCE_SHA: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: '0'
+          GIT_CONFIG_NOSYSTEM: '1'
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_ASKPASS: /bin/false
+        run: |
+          set -euo pipefail
+          # BEGIN clean-lab-scope
+          case "$LAB_REPOSITORY:$LAB_EVENT:$LAB_REF" in
+            dcalderonlo/gentle-ai:workflow_dispatch:refs/heads/verification/?*) ;;
+            *) printf 'Refused: exact owned-fork manual verification/ scope required\n' >&2; exit 1 ;;
+          esac
+          # END clean-lab-scope
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test ! -e .git
+          git init -q
+          git -c credential.helper= -c http.followRedirects=false fetch --no-tags --depth=1 "https://github.com/$LAB_REPOSITORY.git" "$SOURCE_SHA"
+          test "$(git rev-parse FETCH_HEAD)" = "$SOURCE_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          mkdir -m 700 "$RUNNER_TEMP/linux-real-suppliers"
+          printf '%s\n' "$SOURCE_SHA" > "$RUNNER_TEMP/linux-real-suppliers/source.sha"
+
+      - name: Prepare clean real user manager without supplier interception
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          test "$(cat /proc/1/comm)" = systemd
+          test ! -e /work && test ! -e /fixture
+          test ! -e /usr/local/share/ca-certificates/gentle-guest.crt
+          ! grep -Eq 'nodejs\.org|registry\.npmjs\.org|github\.com|pi\.dev' /etc/hosts
+          for key in NODE_EXTRA_CA_CERTS SSL_CERT_FILE SSL_CERT_DIR CURL_CA_BUNDLE REQUESTS_CA_BUNDLE; do
+            test -z "${!key:-}"
+          done
+          sudo -n apt-get update -qq
+          sudo -n apt-get install -y -qq python3-yaml
+          sha256sum /etc/ssl/certs/ca-certificates.crt > "$RUNNER_TEMP/linux-real-suppliers/system-trust.sha256"
+          if systemctl is-active --quiet user@1002.service; then exit 1; fi
+          for kind in passwd group; do
+            for key in 1002 gentle-lab; do
+              status=0; getent "$kind" "$key" >/dev/null || status=$?
+              test "$status" = 2
+            done
+          done
+          sudo -n groupadd --gid 1002 gentle-lab
+          sudo -n useradd --uid 1002 --gid 1002 --no-create-home --home-dir /work --shell /usr/sbin/nologin gentle-lab
+          test "$(id -u gentle-lab):$(id -g gentle-lab)" = 1002:1002
+          sudo -n install -d -o 1002 -g 1002 -m 0700 /work /work/src /work/qualification-tmp
+          sudo -n install -d -m 0755 /fixture /fixture/go
+          git archive HEAD | sudo -n -u gentle-lab tar -xf - -C /work/src
+          # Only the physical probe is used; no interception/fault journey runs.
+          sudo -n install -m 0444 e2e/shell-linux-user-install-guest.py /fixture/harness.py
+          sudo -n install -m 0444 e2e/shell-macos-qualification.py /fixture/qualifier.py
+          sudo -n install -m 0444 e2e/shell-linux-real-evidence.py /fixture/evidence.py
+          curl --noproxy '*' --proto '=https' --max-redirs 0 --fail --silent --show-error --connect-timeout 10 --max-time 180 --max-filesize 59844667 -o "$RUNNER_TEMP/go.data" https://dl.google.com/go/go1.25.10.linux-amd64.tar.gz
+          test "$(stat -c %s "$RUNNER_TEMP/go.data")" = 59844667
+          printf '%s  %s\n' 42d4f7a32316aa66591eca7e89867256057a4264451aca10570a715b3637ba70 "$RUNNER_TEMP/go.data" | sha256sum -c -
+          sudo -n tar --no-same-owner --no-same-permissions --strip-components=1 -xzf "$RUNNER_TEMP/go.data" -C /fixture/go
+          sudo -n install -d /etc/systemd/system/user@1002.service.d
+          test ! -e /etc/systemd/system/user@1002.service.d/gentle-lab.conf
+          printf '[Service]\nDelegate=cpu memory pids\nMemoryMax=3221225472\nMemorySwapMax=0\nCPUQuota=100%%\nCPUQuotaPeriodSec=100ms\nTasksMax=512\nNoNewPrivileges=yes\nCapabilityBoundingSet=\nProtectSystem=strict\nReadWritePaths=/work /tmp /run/user/1002\nProtectProc=invisible\n' | sudo -n tee /etc/systemd/system/user@1002.service.d/gentle-lab.conf >/dev/null
+          sudo -n systemctl daemon-reload
+          sudo -n systemctl start user-runtime-dir@1002.service user@1002.service
+          sudo -n -u gentle-lab test -S /run/user/1002/systemd/private
+          sudo -n -u gentle-lab test -S /run/user/1002/bus
+
+      - name: Build only inside the physically qualified worker
+        id: build
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          cat <<'SH' | sudo -n tee /fixture/worker.sh >/dev/null
+          set -euo pipefail
+          unit="$1"; runtime="$2"; shift 2
+          timeout --kill-after=5 "$((runtime + 20))" sudo -n -u gentle-lab /usr/bin/env -i HOME=/work XDG_RUNTIME_DIR=/run/user/1002 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1002/bus \
+            /usr/bin/systemd-run --user --quiet --wait --collect --service-type=exec --expand-environment=no \
+            --unit="$unit" --working-directory=/work/src --pipe \
+            --property=MemoryMax=3221225472 --property=MemorySwapMax=0 --property=CPUQuota=100% \
+            --property=CPUQuotaPeriodSec=100ms --property=TasksMax=512 --property=NoNewPrivileges=yes \
+            --property=UMask=0077 --property=KillMode=control-group --property=TimeoutStopSec=2s --property="RuntimeMaxSec=$runtime" --property=LimitFSIZE=256M \
+            /usr/bin/env -i PATH=/fixture/go/bin:/usr/local/bin:/usr/bin:/bin HOME=/work TMPDIR=/work/qualification-tmp \
+            XDG_RUNTIME_DIR=/run/user/1002 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1002/bus \
+            GOTOOLCHAIN=local GOMAXPROCS=1 CGO_ENABLED=0 GOCACHE=/work/gocache GOMODCACHE=/work/gomod "$@"
+          SH
+          sudo -n chmod 0444 /fixture/worker.sh
+          cat <<'SH' | sudo -n -u gentle-lab tee /work/build.sh >/dev/null
+          set -euo pipefail
+          /usr/bin/python3 -B /fixture/harness.py probe
+          /usr/bin/python3 -I -B e2e/shell-native-qualification-contract.test.py
+          /usr/bin/python3 -I -B e2e/shell-macos-ci-contract.test.py
+          /usr/bin/python3 -I -B e2e/shell-linux-real-evidence.test.py
+          /usr/bin/python3 -I -B e2e/shell-linux-real-ci-contract.test.py
+          go build -mod=readonly -p 1 -o /work/supervisor ./cmd/gentle-ai
+          SH
+          status=0
+          /bin/bash /fixture/worker.sh gentle-real-build 850 /bin/bash /work/build.sh > "$RUNNER_TEMP/linux-real-suppliers/build.raw" 2>&1 || status=$?
+          printf '%s\n' "$status" > "$RUNNER_TEMP/linux-real-suppliers/build.exit"
+          test "$status" = 0 || exit "$status"
+          test ! -L /work/supervisor
+          test "$(stat -c '%u:%g:%a' /fixture)" = 0:0:755
+          test ! -e /fixture/supervisor && test ! -L /fixture/supervisor
+          sudo -n install -o 0 -g 0 -m 0555 /work/supervisor /fixture/supervisor
+          sha256sum /fixture/supervisor > "$RUNNER_TEMP/linux-real-suppliers/candidate.sha256"
+
+      - name: Qualify actual suppliers once with default production trust
+        id: qualify
+        timeout-minutes: 24
+        shell: bash
+        run: |
+          set -euo pipefail
+          status=0
+          /bin/bash /fixture/worker.sh gentle-real-qualify 1330 /usr/bin/python3 -I /fixture/qualifier.py \
+            --gentle-ai /fixture/supervisor --receipt /work/supplier-receipt.json --source-sha '${{ github.sha }}' \
+            > "$RUNNER_TEMP/linux-real-suppliers/qualification.raw" 2>&1 || status=$?
+          printf '%s\n' "$status" > "$RUNNER_TEMP/linux-real-suppliers/qualification.exit"
+          exit "$status"
+
+      - name: Capture unprivileged receipts and original command outputs
+        if: always() && steps.qualify.outcome != 'skipped'
+        timeout-minutes: 3
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          /bin/bash /fixture/worker.sh gentle-real-capture 120 /usr/bin/python3 -I /fixture/evidence.py \
+            --receipt /work/supplier-receipt.json --base /work/qualification-tmp \
+            > "$RUNNER_TEMP/linux-real-suppliers/worker-evidence.tar" 2> "$RUNNER_TEMP/linux-real-suppliers/capture.stderr"
+          sha256sum -c "$RUNNER_TEMP/linux-real-suppliers/system-trust.sha256"
+          /usr/bin/python3 - "$RUNNER_TEMP/linux-real-suppliers" "$SOURCE_SHA" <<'PY'
+          import hashlib,json,pathlib,sys,tarfile
+          root=pathlib.Path(sys.argv[1])
+          with tarfile.open(root/'worker-evidence.tar','r:') as archive:
+              members=archive.getmembers()
+              assert all(m.isfile() and (m.name=='receipt.json' or m.name.startswith('logs/')) for m in members)
+              assert len({m.name for m in members})==len(members)
+              receipt=archive.extractfile('receipt.json').read(1048577)
+          assert len(receipt)<=1048576
+          payload=json.loads(receipt)
+          assert payload['sourceSHA']==sys.argv[2]
+          expected=(root/'candidate.sha256').read_text().split()[0]
+          if payload['result'] == 'pass':
+              assert payload['candidate']['sha256']==expected
+              assert (root/'qualification.exit').read_text().strip()=='0'
+          with (root/'receipt.json').open('xb') as output:
+              output.write(receipt)
+          summary={'sourceSHA':sys.argv[2],'expectedCandidateSHA256':expected,'receiptSHA256':hashlib.sha256(receipt).hexdigest(),
+                   'result':payload['result'],'failure':payload.get('failure'),'checkpoints':len(payload['checkpoints']),
+                   'proofBoundary':payload['proofBoundary'],'archiveMembers':len(members)}
+          with (root/'summary.json').open('x') as output:
+              json.dump(summary,output,indent=2)
+          print('LINUX-REAL-SUPPLIERS:'+json.dumps(summary,ensure_ascii=True))
+          PY
+
+      - name: Retain source-bound success or failure evidence
+        if: always()
+        timeout-minutes: 2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: linux-real-suppliers-${{ github.sha }}
+          path: ${{ runner.temp }}/linux-real-suppliers/
+          if-no-files-found: error
+          retention-days: 7
