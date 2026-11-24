@@ -113,7 +113,9 @@ jobs:
           sudo -n chmod 0444 /fixture/worker.sh
           cat <<'SH' | sudo -n -u gentle-lab tee /work/build.sh >/dev/null
           set -euo pipefail
-          /usr/bin/python3 -B /fixture/harness.py probe
+          /usr/bin/python3 -B /fixture/harness.py physical
+          /usr/bin/python3 -I -B e2e/shell-linux-physical-preflight.test.py
+          /usr/bin/python3 -I -B e2e/shell-linux-ci-contract.test.py
           /usr/bin/python3 -I -B e2e/shell-native-qualification-contract.test.py
           /usr/bin/python3 -I -B e2e/shell-macos-ci-contract.test.py
           /usr/bin/python3 -I -B e2e/shell-linux-real-evidence.test.py

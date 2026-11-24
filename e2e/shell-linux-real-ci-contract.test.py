@@ -15,13 +15,13 @@ class CleanLinuxLabContract(unittest.TestCase):
                        '--property=MemorySwapMax=0', '--property=CPUQuota=100%', '--property=TasksMax=512',
                        'CapabilityBoundingSet=', 'ProtectSystem=strict', 'KillMode=control-group',
                        'XDG_RUNTIME_DIR=/run/user/1002', 'DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1002/bus',
-                       'go build -mod=readonly -p 1', '/fixture/harness.py probe',
+                       'go build -mod=readonly -p 1', '/fixture/harness.py physical',
                        'shell-macos-qualification.py', '--receipt /work/supplier-receipt.json',
                        'shell-linux-real-evidence.py', 'if-no-files-found: error']:
             self.assertIn(marker, text, marker)
         for forbidden in ['pull_request:', 'secrets.', 'actions/checkout', 'openssl ',
                           'update-ca-certificates', 'tee -a /etc/hosts', 'ip_unprivileged_port_start=',
-                          '/fixture/harness.py full', '/fixture/harness.py smoke', '-ldflags', 'continue-on-error']:
+                          '/fixture/harness.py full', '/fixture/harness.py smoke', '/fixture/harness.py probe', '-ldflags', 'continue-on-error']:
             self.assertNotIn(forbidden, text, forbidden)
         self.assertLess(text.index('# BEGIN clean-lab-scope'), text.index(' fetch '))
         self.assertLess(text.index('# END clean-lab-scope'), text.index('sudo -n apt-get'))

@@ -23,6 +23,13 @@ remain one CPU, 3 GiB memory, no swap and 512 tasks. Build and installation run
 inside that worker, not as the privileged preparer. The existing native
 coordinator gate is not enabled.
 
+The clean lane uses the harness's `physical` mode: every UID, capability, NNP,
+cgroup and read-only-root check remains mandatory. Existing `probe`, `direct`,
+`full` and `smoke` fixture modes still require their original local TLS-listener
+prerequisite. That fixture-only prerequisite must not change the clean VM's
+privileged-port policy. The first attempt exposed this coupling and failed
+before build/install; its RED evidence is retained, not converted into a pass.
+
 There is no laboratory CA, supplier-host override, TLS interceptor or test
 signing-key injection. The system CA bundle is hashed before and checked after
 qualification. Go uses a checksum-verified isolated toolchain; the candidate

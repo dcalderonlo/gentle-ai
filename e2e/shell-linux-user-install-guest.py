@@ -1,5 +1,10 @@
 #!/usr/bin/python3
-"""Credentialless Guest ONLY. Direct evidence is not complete manager/update proof."""
+"""Credentialless Guest ONLY. Direct evidence is not complete manager/update proof.
+
+Modes: physical checks only kernel isolation without a TLS fixture prerequisite;
+probe retains that prerequisite; direct/full/smoke retain their fixture journey.
+No mode changes kernel policy, opens a privileged port or installs trust.
+"""
 import base64
 import ctypes
 import errno
@@ -99,7 +104,7 @@ def remaining():
     return value
 
 
-def kernel():
+def kernel(fixture_tls=True):
     require(os.getuid() == 1002 and os.uname().machine == 'x86_64', 'real UID1002/linuxamd64 required')
     status = pathlib.Path('/proc/self/status').read_text()
     for key in ['CapInh', 'CapPrm', 'CapEff', 'CapAmb', 'CapBnd']:
@@ -118,7 +123,8 @@ def kernel():
         require((group / name).read_text().strip() == value, 'physical cgroup limit differs')
     require(' - cgroup2 ' in pathlib.Path('/proc/self/mountinfo').read_text(), 'cgroup2 mount missing')
     require(os.statvfs('/').f_flag & os.ST_RDONLY, 'physical Guest root mount must be read-only')
-    require(pathlib.Path('/proc/sys/net/ipv4/ip_unprivileged_port_start').read_text().strip() == '0', 'nonprivileged TLS fixture port unavailable')
+    if fixture_tls:
+        require(pathlib.Path('/proc/sys/net/ipv4/ip_unprivileged_port_start').read_text().strip() == '0', 'nonprivileged TLS fixture port unavailable')
     REPORT['kernel'] = {'uid': os.getuid(), 'limits': expected}
 
 
@@ -1162,9 +1168,9 @@ def mvp_smoke(personal):
 
 def main():
     global FAULT, PI_LATEST
-    require(MODE in {'probe', 'direct', 'full', 'smoke'}, 'explicit qualification mode')
-    if MODE == 'probe':
-        kernel()
+    require(MODE in {'physical', 'probe', 'direct', 'full', 'smoke'}, 'explicit qualification mode')
+    if MODE in {'physical', 'probe'}:
+        kernel(fixture_tls=MODE == 'probe')
         print(json.dumps({'physicalWorker': REPORT['kernel'], 'functionalReady': False}, sort_keys=True))
         return
     if MODE in {'full', 'smoke'}:
