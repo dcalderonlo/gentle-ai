@@ -67,23 +67,31 @@ func userNativeOwnerEnvironment(env []string) []string {
 
 // This selector transports a bounded deadline, not execution authority. It
 // repeats fresh physical consent checks before creating any operation state.
-func userNativeOwnerEntry(ctx context.Context, self string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+func userNativeOwnerRequest(ctx context.Context, args []string) (UserInstallRequest, time.Time, error) {
 	if err := nativeRuntimeError(ctx, nil); err != nil {
-		return err
+		return UserInstallRequest{}, time.Time{}, err
 	}
 	if len(args) < 6 {
-		return privateError("refused", errors.New("invalid native owner arguments"))
+		return UserInstallRequest{}, time.Time{}, privateError("refused", errors.New("invalid native owner arguments"))
 	}
 	deadline, err := userNativeDeadline(args[0], time.Now())
 	if err != nil {
-		return err
+		return UserInstallRequest{}, time.Time{}, err
 	}
 	req, fresh, err := userNativeFreshRequest(args[1:])
 	if err != nil {
-		return err
+		return UserInstallRequest{}, time.Time{}, err
 	}
 	if !fresh {
-		return privateError("refused", errors.New("native owner requires a fresh Separate selection"))
+		return UserInstallRequest{}, time.Time{}, privateError("refused", errors.New("native owner requires a fresh Separate selection"))
+	}
+	return req, deadline, nil
+}
+
+func userNativeOwnerEntry(ctx context.Context, self string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	req, deadline, err := userNativeOwnerRequest(ctx, args)
+	if err != nil {
+		return err
 	}
 	ctx, cancel := context.WithDeadline(ctx, deadline)
 	defer cancel()

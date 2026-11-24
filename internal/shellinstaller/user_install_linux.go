@@ -509,9 +509,20 @@ func RunUserEntry(ctx context.Context, self string, args []string, stdin io.Read
 	if len(args) == 0 {
 		return errors.New("missing shell entry")
 	}
-	// Preserve argument refusals before acquisition or source admission.
-	if args[0] == "internal-install" || args[0] == "internal-install-direct" {
+	// Preserve request refusals before acquisition or source admission.
+	// Operations repeat these checks after preparation: physical selection and
+	// the transported deadline must still be valid when execution begins.
+	switch args[0] {
+	case "install":
+		if _, _, err := userNativeFreshRequest(args[1:]); err != nil {
+			return err
+		}
+	case "internal-install", "internal-install-direct":
 		if _, err := UserInstallFromEntry(args[1:]); err != nil {
+			return err
+		}
+	case "internal-native-own":
+		if _, _, err := userNativeOwnerRequest(ctx, args[1:]); err != nil {
 			return err
 		}
 	}

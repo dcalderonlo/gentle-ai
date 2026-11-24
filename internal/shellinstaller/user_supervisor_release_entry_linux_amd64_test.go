@@ -14,6 +14,26 @@ import (
 	"time"
 )
 
+func TestSupervisorReleaseCanceledNativeOwnerEntryBeforeAcquisition(t *testing.T) {
+	root := userUnixTempRoot(t)
+	calls := 0
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = WithSupervisorRelease(ctx, "1.2.3", func(context.Context, string) ([]byte, error) {
+		calls++
+		return nil, errors.New("unexpected acquisition")
+	})
+	cancel()
+	var stdout, stderr bytes.Buffer
+	err := RunUserEntry(ctx, filepath.Join(root, "missing"), []string{"internal-native-own"}, nil, &stdout, &stderr)
+	if !errors.Is(err, context.Canceled) || calls != 0 || stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("error=%v acquisitions=%d stdout=%q stderr=%q", err, calls, stdout.String(), stderr.String())
+	}
+	entries, readErr := os.ReadDir(root)
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("canceled entry changed scratch: entries=%v error=%v", entries, readErr)
+	}
+}
+
 func TestSupervisorReleaseMalformedNativeOwnerEntryBeforeAcquisition(t *testing.T) {
 	for _, tc := range []struct {
 		name string
