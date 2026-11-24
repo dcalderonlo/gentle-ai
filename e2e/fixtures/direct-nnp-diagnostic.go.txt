@@ -1,0 +1,114 @@
+//go:build linux && amd64
+
+package shellinstaller
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
+)
+
+const directNNPDiagnosticDestination = "GENTLE_DIRECT_NNP_DIAGNOSTIC_DESTINATION"
+
+func directNNPDiagnosticStatus(path string) map[string]string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return map[string]string{"readError": err.Error()}
+	}
+	result := make(map[string]string)
+	for _, line := range strings.Split(string(data), "\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if ok && (key == "Uid" || key == "NoNewPrivs") {
+			result[key] = strings.TrimSpace(value)
+		}
+	}
+	return result
+}
+
+func directNNPDiagnosticChild(destination string) {
+	runtime.LockOSThread()
+	beforeLeader := directNNPDiagnosticStatus("/proc/self/status")
+	beforeCaller := directNNPDiagnosticStatus("/proc/thread-self/status")
+	if unix.Gettid() == os.Getpid() || beforeLeader["NoNewPrivs"] != "0" || beforeCaller["NoNewPrivs"] != "0" {
+		fmt.Println("NNP-DIAGNOSTIC: invalid nonleader/unconfined diagnostic context")
+		os.Exit(2)
+	}
+	req := UserInstallRequest{Destination: destination, Mode: "separate"}
+	confirmation, err := InspectUserInstall(req)
+	if err != nil {
+		fmt.Println("NNP-DIAGNOSTIC: inspect: " + err.Error())
+		os.Exit(2)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err = RunUserEntry(ctx, os.Args[0], []string{"internal-install-direct", destination, "separate", "", "", confirmation}, nil, io.Discard, io.Discard)
+	message := ""
+	if err != nil {
+		message = err.Error()
+	}
+	report := map[string]any{
+		"pid": os.Getpid(), "tid": unix.Gettid(),
+		"beforeLeader": beforeLeader, "beforeCaller": beforeCaller,
+		"afterLeader": directNNPDiagnosticStatus("/proc/self/status"),
+		"afterCaller": directNNPDiagnosticStatus("/proc/thread-self/status"),
+		"error": message, "typedContention": isOperationInProgress(err),
+	}
+	data, marshalErr := json.Marshal(report)
+	if marshalErr != nil {
+		os.Exit(2)
+	}
+	fmt.Println("NNP-DIAGNOSTIC:" + string(data))
+	if isOperationInProgress(err) {
+		os.Exit(0)
+	}
+	os.Exit(3)
+}
+
+func TestDirectNNPThreadDiagnostic(t *testing.T) {
+	if destination := os.Getenv(directNNPDiagnosticDestination); destination != "" {
+		runtime.GOMAXPROCS(2)
+		runtime.LockOSThread()
+		if unix.Gettid() != os.Getpid() {
+			directNNPDiagnosticChild(destination)
+			return
+		}
+		// Keep the leader occupied; the diagnostic call must use another thread.
+		go directNNPDiagnosticChild(destination)
+		select {}
+	}
+	if os.Getuid() == 0 {
+		t.Fatal("diagnostic requires the existing non-root Linux runner")
+	}
+	destination := userLockDestination(t)
+	if err := os.Chmod(filepath.Dir(destination), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	release, err := userAcquireOperationLock(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	child := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestDirectNNPThreadDiagnostic$", "-test.count=1")
+	child.Env = append(os.Environ(), directNNPDiagnosticDestination+"="+destination)
+	output, childErr := child.CombinedOutput()
+	t.Log(string(output))
+	if childErr != nil {
+		t.Errorf("direct entry must return typed operation contention from its controlled caller: %v", childErr)
+	}
+	entries, readErr := os.ReadDir(filepath.Dir(destination))
+	if readErr != nil || len(entries) != 1 || entries[0].Name() != ".install.gentle-shell.lock" {
+		t.Errorf("rejected install changed parent: entries=%v error=%v", entries, readErr)
+	}
+}
