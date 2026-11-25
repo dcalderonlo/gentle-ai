@@ -16,6 +16,16 @@ is selected. It does not change Homebrew, system Bash, profiles, production
 scripts, release keys or security-test assertions. Nothing is installed on the
 developer's host.
 
+## Registered entry
+
+When GitHub has not registered the new standalone lane, manually dispatch the
+already-registered `Supervisor repository suites` workflow with boolean input
+`macos_gaps_only=true` on the authorized verification branch. It calls this
+lane from the **same commit**, without publishing the workflow on `main`.
+The baseline resolver and all dependent matrix jobs are skipped only for this
+explicit opt-in; an omitted/false input preserves the ordinary matrix exactly.
+The callee still checks the exact owned-fork/manual branch before source fetch.
+
 ## Scope and limits
 
 - Owned fork, manual dispatch on literal `verification/macos-gaps-*` only.

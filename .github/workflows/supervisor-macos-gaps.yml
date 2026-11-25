@@ -5,6 +5,7 @@ on:
     branches: ['verification/macos-gaps-*']
     paths: ['.github/workflows/supervisor-macos-gaps.yml']
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
