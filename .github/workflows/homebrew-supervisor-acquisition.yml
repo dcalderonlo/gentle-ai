@@ -67,3 +67,30 @@ jobs:
         run: go test -v ./internal/cli -run '^TestShellInstallRelease' -count=1 -timeout=5m
       - name: Execute early application dispatch tests
         run: go test -v ./internal/app -run '^TestShellInstallInitializesBuildBeforeEarlyDispatch$' -count=1 -timeout=5m
+      - name: Verify Linux release security boundaries
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v bash
+          command -v jq
+          command -v sha256sum
+          test "$(uname -m)" = x86_64
+          selector='^Test(ReleaseAssetVerifierPreservesReadOnlyRotationVerification|ReleaseDistributionPolicyAssertionFailsClosed|ReleaseDistributionPolicyAcceptsSemanticYAMLFormatting|ModifiedReleaseVerifierCannotGainWriteAuthority|WindowsInstallAndUpgradeContainNoRemoteBinaryOrScriptPath)$'
+          go test ./internal/update -list "$selector" -timeout=5m | tee "$RUNNER_TEMP/release-inventory.txt"
+          for name in TestReleaseAssetVerifierPreservesReadOnlyRotationVerification TestReleaseDistributionPolicyAssertionFailsClosed TestReleaseDistributionPolicyAcceptsSemanticYAMLFormatting TestModifiedReleaseVerifierCannotGainWriteAuthority TestWindowsInstallAndUpgradeContainNoRemoteBinaryOrScriptPath; do
+            grep -Fx "$name" "$RUNNER_TEMP/release-inventory.txt"
+          done
+          go test -v ./internal/update -run "$selector" -count=1 -timeout=5m 2>&1 | tee "$RUNNER_TEMP/release-results.txt"
+          grep -E '^--- PASS: TestReleaseAssetVerifierPreservesReadOnlyRotationVerification \(' "$RUNNER_TEMP/release-results.txt"
+      - name: Verify Windows installer boundaries
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          selector='^Test(UserWindows(GoReusable|ReuseComponents|StageMainMetadata|MainComponentUpdate|InventoryCarried|PublicationInventory|RetryBusy|LockHolderCandidates|RestartManager|RenameBusy)|Windows(MainCheck|StableCheckNode))'
+          go test ./internal/shellinstaller -list "$selector" -timeout=5m | tee "$RUNNER_TEMP/windows-inventory.txt"
+          for name in TestUserWindowsGoReusable TestUserWindowsStageMainMetadataKeepsReusedSnapshot TestUserWindowsInventoryCarriedAdmitsOperatorStateOnly TestUserWindowsRestartManagerReportsOwnProcess TestWindowsStableCheckNodeComparesRetainedArchive; do
+            grep -Fx "$name" "$RUNNER_TEMP/windows-inventory.txt"
+          done
+          go test -v ./internal/shellinstaller -run "$selector" -count=1 -timeout=5m
