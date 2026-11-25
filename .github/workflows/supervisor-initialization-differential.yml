@@ -1,10 +1,12 @@
 name: Supervisor initialization differential smoke
 
 on:
-  push:
-    branches: [fix/homebrew-verified-supervisor]
   workflow_dispatch:
     inputs:
+      confirm_matrix:
+        description: Explicitly authorize this diagnostic matrix and its runner cost
+        type: boolean
+        default: false
       baseline_sha:
         description: Full baseline commit SHA (40 or 64 hex characters)
         required: true
@@ -15,6 +17,7 @@ permissions:
 
 jobs:
   baseline:
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm_matrix == true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:

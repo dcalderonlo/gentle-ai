@@ -22,8 +22,11 @@ When GitHub has not registered the new standalone lane, manually dispatch the
 already-registered `Supervisor repository suites` workflow with boolean input
 `macos_gaps_only=true` on the authorized verification branch. It calls this
 lane from the **same commit**, without publishing the workflow on `main`.
-The baseline resolver and all dependent matrix jobs are skipped only for this
-explicit opt-in; an omitted/false input preserves the ordinary matrix exactly.
+The baseline resolver and all dependent matrix jobs require separate
+`confirm_matrix=true`, with `macos_gaps_only` false. Omitted confirmations run
+neither branch; setting both flags true fails closed by running neither. The
+matrix contents, test commands and limits are unchanged. These diagnostic
+workflows have no automatic push triggers.
 The callee still checks the exact owned-fork/manual branch before source fetch.
 
 ## Scope and limits

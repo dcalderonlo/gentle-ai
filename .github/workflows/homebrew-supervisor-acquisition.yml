@@ -1,15 +1,19 @@
 name: Verified supervisor acquisition
 
 on:
-  push:
-    branches: [fix/homebrew-verified-supervisor]
   workflow_dispatch:
+    inputs:
+      confirm_matrix:
+        description: Explicitly authorize this diagnostic matrix and its runner cost
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   acquisition:
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm_matrix == true
     name: Signed acquisition (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20

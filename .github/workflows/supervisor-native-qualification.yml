@@ -1,0 +1,87 @@
+name: Private-source macOS supervisor qualification
+
+# Actual supplier runtime/install proof, not Homebrew bootstrap, signature,
+# official candidate identity, or uninstall proof. Stable resolves latest at
+# installation; the receipt records the resulting lock and SDK integrity.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos-native:
+    name: Private-source actual-supplier installation and recovery
+    runs-on: macos-latest
+    timeout-minutes: 55
+    steps:
+      - name: Check out exact candidate
+        timeout-minutes: 3
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify candidate and native capability
+        timeout-minutes: 1
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          test "$(uname -s)/$(uname -m)" = Darwin/arm64 || { echo 'native Darwin arm64 required' >&2; exit 1; }
+          test "$(id -u)" -ne 0 || { echo 'non-root required' >&2; exit 1; }
+          test "$(sw_vers -productVersion | cut -d. -f1)" -ge 14 || { echo 'macOS 14+ required' >&2; exit 1; }
+      - name: Set up candidate Go toolchain
+        timeout-minutes: 3
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Native installer package tests
+        timeout-minutes: 8
+        run: go test ./internal/shellinstaller ./scripts -count=1
+      - name: Native CLI shell tests
+        timeout-minutes: 4
+        run: go test ./internal/cli -run Shell -count=1
+      - name: Native TUI tests
+        timeout-minutes: 4
+        run: go test ./internal/tui/... -count=1
+      - name: Qualification contract
+        timeout-minutes: 1
+        run: /usr/bin/python3 -I e2e/shell-macos-ci-contract.test.py
+      - name: Build exact candidate
+        timeout-minutes: 4
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -m 700 "$RUNNER_TEMP/candidate" "$RUNNER_TEMP/macos-qualification"
+          go build -mod=readonly -o "$RUNNER_TEMP/candidate/gentle-ai" ./cmd/gentle-ai
+          shasum -a 256 "$RUNNER_TEMP/candidate/gentle-ai" | cut -d' ' -f1 > "$RUNNER_TEMP/macos-qualification/candidate.sha256"
+      - name: Qualify actual suppliers
+        id: qualify
+        timeout-minutes: 25
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          base="$(mktemp -d /private/tmp/gentle-macos-qualification.XXXXXX)"
+          test "$(stat -f '%Su:%Lp' "$base")" = "$(id -un):700"
+          /usr/bin/env -i PATH=/usr/bin:/bin TMPDIR="$base" /usr/bin/python3 -I e2e/shell-macos-qualification.py \
+            --gentle-ai "$RUNNER_TEMP/candidate/gentle-ai" \
+            --receipt "$RUNNER_TEMP/macos-qualification/receipt.json" --source-sha "$SOURCE_SHA"
+          /usr/bin/python3 -I -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["sourceSHA"] == sys.argv[3] and r["candidate"]["sha256"] == open(sys.argv[2]).read().strip(), "candidate receipt identity mismatch"' \
+            "$RUNNER_TEMP/macos-qualification/receipt.json" "$RUNNER_TEMP/macos-qualification/candidate.sha256" "$SOURCE_SHA"
+      - name: Upload owned qualification evidence
+        if: always() && steps.qualify.outcome != 'skipped'
+        timeout-minutes: 2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: private-source-macos-qualification-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/macos-qualification/receipt.json
+            ${{ runner.temp }}/macos-qualification/candidate.sha256
+          retention-days: 14
+          if-no-files-found: error

@@ -8,7 +8,7 @@ Homebrew bootstrap, uninstall or Windows installation qualification.
 
 The lane is `.github/workflows/shell-linux-real-suppliers.yml`. It accepts only
 manual dispatches in `dcalderonlo/gentle-ai` on literal `verification/*` branches.
-Push events register the workflow but never run its privileged laboratory.
+There are no push, pull-request or schedule triggers; only deliberate manual execution is allowed at this revision.
 The case-sensitive shell gate runs before source fetch or preparation.
 
 Each authorized attempt is one dispatch, at most 60 minutes. Failure, timeout

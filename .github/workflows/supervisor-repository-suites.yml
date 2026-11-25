@@ -1,17 +1,12 @@
 name: Supervisor repository suites
 
 on:
-  push:
-    branches: [fix/homebrew-verified-supervisor, 'verification/repository-suites-*']
-    paths:
-      - '**/*.go'
-      - '**/go.mod'
-      - '**/go.sum'
-      - 'bench/**'
-      - 'e2e/supervisor-repository-ci-contract.test.py'
-      - '.github/workflows/supervisor-repository-suites.yml'
   workflow_dispatch:
     inputs:
+      confirm_matrix:
+        description: Explicitly authorize this diagnostic matrix and its runner cost
+        type: boolean
+        default: false
       macos_gaps_only:
         description: Run only the missing macOS checks on an authorized verification branch
         type: boolean
@@ -22,11 +17,11 @@ permissions:
 
 jobs:
   macos-gaps-only:
-    if: github.repository == 'dcalderonlo/gentle-ai' && github.event_name == 'workflow_dispatch' && inputs.macos_gaps_only == true && startsWith(github.ref, 'refs/heads/verification/macos-gaps-')
+    if: github.repository == 'dcalderonlo/gentle-ai' && github.event_name == 'workflow_dispatch' && inputs.macos_gaps_only == true && inputs.confirm_matrix != true && startsWith(github.ref, 'refs/heads/verification/macos-gaps-')
     uses: ./.github/workflows/supervisor-macos-gaps.yml
 
   baseline:
-    if: inputs.macos_gaps_only != true
+    if: github.event_name == 'workflow_dispatch' && inputs.confirm_matrix == true && inputs.macos_gaps_only != true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:

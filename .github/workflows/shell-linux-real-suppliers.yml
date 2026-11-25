@@ -1,10 +1,6 @@
 name: Gentle Shell Linux actual suppliers
 
 on:
-  # Registration only: the privileged job rejects all push events.
-  push:
-    branches: ['verification/linux-real-*']
-    paths: ['.github/workflows/shell-linux-real-suppliers.yml']
   workflow_dispatch:
 
 permissions: {}

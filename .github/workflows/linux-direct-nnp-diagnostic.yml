@@ -1,18 +1,19 @@
 name: Linux direct entry NNP diagnostic
 
 on:
-  push:
-    branches: ['verification/linux-nnp-*']
-    paths:
-      - '.github/workflows/linux-direct-nnp-diagnostic.yml'
-      - 'e2e/fixtures/direct-nnp-diagnostic.go.txt'
+  workflow_dispatch:
+    inputs:
+      confirm_matrix:
+        description: Explicitly authorize this diagnostic matrix and its runner cost
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   diagnostic:
-    if: github.repository == 'dcalderonlo/gentle-ai' && github.event_name == 'push'
+    if: github.repository == 'dcalderonlo/gentle-ai' && github.event_name == 'workflow_dispatch' && inputs.confirm_matrix == true && startsWith(github.ref, 'refs/heads/verification/linux-nnp-')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     strategy:
@@ -21,6 +22,15 @@ jobs:
       matrix:
         role: [before-linux-bootstrap, candidate]
     steps:
+      - name: Require exact manual diagnostic branch
+        shell: bash
+        run: |
+          # BEGIN diagnostic-manual-scope
+          case "$GITHUB_REF" in
+            refs/heads/verification/linux-nnp-?*) ;;
+            *) printf 'Refused: exact diagnostic branch required\n' >&2; exit 1 ;;
+          esac
+          # END diagnostic-manual-scope
       - name: Checkout diagnostic definition
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:

@@ -1,5 +1,4 @@
 """Routing and canonical-command controls; not executed suite evidence."""
-import fnmatch
 import pathlib
 import unittest
 
@@ -32,14 +31,15 @@ def job_body(text, name):
 
 
 class RepositoryCIContract(unittest.TestCase):
-    def test_diagnostic_branch_and_existing_feature_branch_are_routed(self):
-        line = next(line for line in WORKFLOW.read_text().splitlines()
-                    if line.strip().startswith('branches: ['))
-        patterns = [item.strip().strip("'\"") for item in
-                    line.split('[', 1)[1].split(']', 1)[0].split(',')]
-        for branch in ('fix/homebrew-verified-supervisor', 'verification/repository-suites-probe'):
-            self.assertTrue(any(fnmatch.fnmatchcase(branch, pattern) for pattern in patterns), branch)
-        self.assertFalse(any(fnmatch.fnmatchcase('main', pattern) for pattern in patterns))
+    def test_diagnostics_are_manual_and_matrix_is_explicit(self):
+        text = WORKFLOW.read_text()
+        header = text.split('on:\n', 1)[1].split('\npermissions:', 1)[0]
+        self.assertIn('  workflow_dispatch:', header)
+        self.assertNotIn('  push:', header)
+        self.assertNotIn('  pull_request:', header)
+        confirmation = header.split('      confirm_matrix:\n', 1)[1]
+        self.assertIn('type: boolean', confirmation)
+        self.assertIn('default: false', confirmation)
 
     def test_default_matrix_remains_baseline_gated(self):
         text = WORKFLOW.read_text()
@@ -51,21 +51,22 @@ class RepositoryCIContract(unittest.TestCase):
             self.assertNotIn('always()', body)
         baseline = job_body(text, 'baseline')
         conditions = [line.strip() for line in baseline.splitlines() if line.startswith('    if:')]
-        self.assertIn(conditions, [[], ['if: inputs.macos_gaps_only != true']])
-        # No input or explicit false keeps ordinary push/manual matrix admission.
+        self.assertEqual(conditions, ["if: github.event_name == 'workflow_dispatch' && inputs.confirm_matrix == true && inputs.macos_gaps_only != true"])
+        # Ordinary omitted/false confirmation must allocate no matrix runners.
         for selected in (None, False):
-            self.assertTrue(selected is not True)
+            self.assertFalse(selected is True)
 
     def test_macos_opt_in_uses_same_ref_lane_and_skips_matrix(self):
         text = WORKFLOW.read_text()
         dispatch = text.split('  workflow_dispatch:\n', 1)[1].split('\npermissions:', 1)[0]
         for marker in ('macos_gaps_only:', 'type: boolean', 'default: false'):
             self.assertIn(marker, dispatch)
-        self.assertIn('    if: inputs.macos_gaps_only != true', job_body(text, 'baseline'))
+        self.assertIn("    if: github.event_name == 'workflow_dispatch' && inputs.confirm_matrix == true && inputs.macos_gaps_only != true", job_body(text, 'baseline'))
         mac = job_body(text, 'macos-gaps-only')
         self.assertIn("github.repository == 'dcalderonlo/gentle-ai'", mac)
         self.assertIn("github.event_name == 'workflow_dispatch'", mac)
         self.assertIn('inputs.macos_gaps_only == true', mac)
+        self.assertIn('inputs.confirm_matrix != true', mac)
         self.assertIn("startsWith(github.ref, 'refs/heads/verification/macos-gaps-')", mac)
         self.assertIn('uses: ./.github/workflows/supervisor-macos-gaps.yml', mac)
         self.assertNotIn('runs-on:', mac)
@@ -73,10 +74,12 @@ class RepositoryCIContract(unittest.TestCase):
         callee = (ROOT / '.github/workflows/supervisor-macos-gaps.yml').read_text()
         self.assertIn('  workflow_call:', callee)
         self.assertIn('timeout-minutes: 40', callee)
-        for selected in (None, False, True):
-            baseline = selected is not True
-            macos = selected is True
-            self.assertNotEqual(baseline, macos)
+        for confirm, selected, expected in [(None, None, (False, False)), (False, False, (False, False)),
+                                             (True, False, (True, False)), (False, True, (False, True)),
+                                             (True, True, (False, False))]:
+            baseline = confirm is True and selected is not True
+            macos = selected is True and confirm is not True
+            self.assertEqual((baseline, macos), expected)
 
     def test_driven_commands_and_assertions_match_canonical_ci(self):
         text = WORKFLOW.read_text()

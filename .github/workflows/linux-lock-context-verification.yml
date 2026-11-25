@@ -1,21 +1,26 @@
 name: Linux qualified lock fixture verification
 
 on:
-  push:
-    branches: ['verification/linux-lock-fix-*']
-    paths:
-      - 'internal/shellinstaller/user_install_lock_test.go'
-      - '.github/workflows/linux-lock-context-verification.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   verify:
-    if: github.repository == 'dcalderonlo/gentle-ai' && github.event_name == 'push'
+    if: github.repository == 'dcalderonlo/gentle-ai' && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/verification/linux-lock-fix-')
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
+      - name: Require exact manual diagnostic branch
+        shell: bash
+        run: |
+          # BEGIN diagnostic-manual-scope
+          case "$GITHUB_REF" in
+            refs/heads/verification/linux-lock-fix-?*) ;;
+            *) printf 'Refused: exact diagnostic branch required\n' >&2; exit 1 ;;
+          esac
+          # END diagnostic-manual-scope
       - name: Checkout exact corrected fixture
         uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
