@@ -1,0 +1,126 @@
+name: Supervisor missing macOS checks
+
+on:
+  push:
+    branches: ['verification/macos-gaps-*']
+    paths: ['.github/workflows/supervisor-macos-gaps.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  missing-checks:
+    if: github.repository == 'dcalderonlo/gentle-ai' && github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/heads/verification/macos-gaps-')
+    runs-on: macos-latest
+    timeout-minutes: 40
+    env:
+      LC_ALL: C
+    steps:
+      - name: Bind exact authorized source and native platform
+        timeout-minutes: 1
+        shell: bash
+        env:
+          LAB_REPOSITORY: ${{ github.repository }}
+          LAB_EVENT: ${{ github.event_name }}
+          LAB_REF: ${{ github.ref }}
+          SOURCE_SHA: ${{ github.sha }}
+          GIT_TERMINAL_PROMPT: '0'
+          GIT_CONFIG_NOSYSTEM: '1'
+          GIT_CONFIG_GLOBAL: /dev/null
+          GIT_ASKPASS: /bin/false
+        run: |
+          set -euo pipefail
+          # BEGIN macos-gap-scope
+          case "$LAB_REPOSITORY:$LAB_EVENT:$LAB_REF" in
+            dcalderonlo/gentle-ai:workflow_dispatch:refs/heads/verification/macos-gaps-?*) ;;
+            *) printf 'Refused: exact manual macOS gap scope required\n' >&2; exit 1 ;;
+          esac
+          # END macos-gap-scope
+          test "$(uname -s)/$(uname -m)" = Darwin/arm64
+          test "$(id -u)" -ne 0
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test ! -e .git
+          git init -q
+          git -c credential.helper= -c http.followRedirects=false fetch --no-tags --depth=1 "https://github.com/$LAB_REPOSITORY.git" "$SOURCE_SHA"
+          test "$(git rev-parse FETCH_HEAD)" = "$SOURCE_SHA"
+          git checkout --detach FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          mkdir -m 700 "$RUNNER_TEMP/macos-gaps"
+          printf '%s\n' "$SOURCE_SHA" > "$RUNNER_TEMP/macos-gaps/source.sha"
+          sw_vers > "$RUNNER_TEMP/macos-gaps/platform.txt"
+          /bin/bash --version > "$RUNNER_TEMP/macos-gaps/apple-bash.txt"
+
+      - name: Set up existing project Go prerequisite
+        timeout-minutes: 2
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            bench/go.sum
+
+      - name: Build checksum-verified GNU Bash in runner-local prefix
+        id: bash
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          test -z "${BASH_ENV:-}" && test -z "${ENV:-}"
+          xcrun --find clang
+          base=$(mktemp -d "$RUNNER_TEMP/macos-gap-bash.XXXXXX")
+          mkdir "$base/src" "$base/prefix"
+          curl --proto '=https' --max-redirs 0 --fail --silent --show-error --connect-timeout 10 --max-time 120 --max-filesize 33554432 \
+            -o "$base/bash.tar.gz" https://ftp.gnu.org/gnu/bash/bash-5.3.tar.gz
+          printf '%s  %s\n' 0d5cd86965f869a26cf64f4b71be7b96f90a3ba8b3d74e27e8e9d9d5550f31ba "$base/bash.tar.gz" | shasum -a 256 -c -
+          tar -xzf "$base/bash.tar.gz" --strip-components=1 -C "$base/src"
+          cd "$base/src"
+          ./configure --disable-nls --prefix="$base/prefix" > "$RUNNER_TEMP/macos-gaps/bash-configure.raw" 2>&1
+          make -j2 > "$RUNNER_TEMP/macos-gaps/bash-build.raw" 2>&1
+          make install > "$RUNNER_TEMP/macos-gaps/bash-install.raw" 2>&1
+          test -f "$base/prefix/bin/bash" && test ! -L "$base/prefix/bin/bash"
+          "$base/prefix/bin/bash" --noprofile --norc -c 'test "${BASH_VERSINFO[0]}" = 5; test "${BASH_VERSINFO[1]}" = 3; declare -A proof=([ok]=yes); [[ -v proof[ok] && ${proof[ok]} == yes ]]'
+          "$base/prefix/bin/bash" --version > "$RUNNER_TEMP/macos-gaps/gnu-bash.txt"
+          shasum -a 256 "$base/prefix/bin/bash" > "$RUNNER_TEMP/macos-gaps/gnu-bash.sha256"
+          printf '%s\n' "$base/prefix/bin" >> "$GITHUB_PATH"
+          printf 'GAP_BASH=%s\n' "$base/prefix/bin/bash" >> "$GITHUB_ENV"
+
+      - name: Check the two previously failed release-security tests
+        timeout-minutes: 12
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(command -v bash)" = "$GAP_BASH"
+          status=0
+          go test -v ./internal/update -run '^(TestReleaseSecurityScriptsAreSyntacticallyValidAndFailClosed|TestCanonicalReleasePublicKeysControlRealLinkerBuild)$' -count=1 \
+            > "$RUNNER_TEMP/macos-gaps/release-security.raw" 2>&1 || status=$?
+          printf '%s\n' "$status" > "$RUNNER_TEMP/macos-gaps/release-security.exit"
+          exit "$status"
+
+      - name: Check previously unstarted candidate macOS bench module
+        if: always() && steps.bash.outcome == 'success'
+        timeout-minutes: 12
+        shell: bash
+        working-directory: bench
+        run: |
+          set -euo pipefail
+          test "$(command -v bash)" = "$GAP_BASH"
+          status=0
+          (
+            go build -o "$RUNNER_TEMP/gentle-ai-bench" . &&
+            go vet ./... &&
+            go test -v ./... -count=1
+          ) > "$RUNNER_TEMP/macos-gaps/bench.raw" 2>&1 || status=$?
+          printf '%s\n' "$status" > "$RUNNER_TEMP/macos-gaps/bench.exit"
+          exit "$status"
+
+      - name: Retain missing-check outcomes without normalizing failures
+        if: always()
+        timeout-minutes: 2
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: macos-gaps-${{ github.sha }}
+          path: ${{ runner.temp }}/macos-gaps/
+          if-no-files-found: error
+          retention-days: 7
